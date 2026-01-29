@@ -3,9 +3,17 @@
 - [What is MCP](#what-is-mcp)
     - [MCP is an Open Source Standard for Connecting AI Applications to External Systems](#1-mcp-is-an-open-source-standard-for-connecting-ai-applications-to-external-systems)
     - [Using MCP, AI Applications Can Connect to Data Sources, Tools, and Workflows](#2-using-mcp-ai-applications-can-connect-to-data-sources-tools-and-workflows)
-    - [Protocol Messages](#protocol-messages)
-        - [Listing Tools(tools/list)](#1-listing-tools-toolslist)
-        - [Calling Tools(tools/cal)](#2-calling-tools-toolscall)
+- [Workflows of MCP](#workflows-of-mcp)
+    - [The Center:MCP (Standard Protocol)](#1-the-center-mcp-standardized-protocol)
+    - [Left Side: AI(Applications Consumers)](#2-left-side-ai-applications-consumers)
+    - [Right Side: Data Source And Tools(Providers)](#3-right-side-data-sources-and-tools-providers)
+- [MCP Server](#mcp-server)
+    - [Understanding MCP Servers](#understanding-mcp-servers)
+- [Architecture](#architecture)
+- [Protocol Messages](#protocol-messages)
+    - [Listing Tools(tools/list)](#1-listing-tools-toolslist)
+    - [Calling Tools(tools/cal)](#2-calling-tools-toolscall)
+    - [List Changed Notification](#3-list-changed-notification)
 ## What is MCP
 ### 1. “MCP is an open-source standard for connecting AI applications to external systems”
 - Open-source standard
@@ -70,6 +78,7 @@
     - This is what enables **true AI agents**.
 ### 3. “Enabling them to access key information and perform tasks”
 - This is the **capability jump**.
+
 | **Without MCP**     | **With MCP**          |
 | ------------------- | --------------------- |
 | Chatbot             | Agent                 |
@@ -84,6 +93,7 @@ to
 - “Think of MCP like a USB-C port for AI applications.”
 - This analogy is excellent, not just marketing.
 - **Why USB-C works as an analogy:**
+
 | **USB-C**               | **MCP**                  |
 | ----------------------- | ------------------------ |
 | Standard port           | Standard protocol        |
@@ -93,9 +103,9 @@ to
 - Before USB-C:
     - Every device needed a different cable
 
-### Workflows of MCP
+## Workflows of MCP
 ![MCP Workflow](./images/mcp_workflow.png)
-#### 1. The Center: MCP (Standardized Protocol)
+### 1. The Center: MCP (Standardized Protocol)
 - **“MCP – Standardized protocol”**
 - What it means:
     - MCP is not an app
@@ -111,7 +121,7 @@ to
     - The **API grammar** between AI and the world
 - Without MCP → everyone invents their own glue code
 - With MCP → everything plugs into the same interface
-#### 2. Left Side: AI Applications (Consumers)
+### 2. Left Side: AI Applications (Consumers)
 - These are **clients** of MCP.
 - **Chat interface**
     - Claude Desktop, LibreChat
@@ -135,6 +145,86 @@ to
         - Create commits
     - This is how “AI pair programmers” actually work **safely**.
     - **“Bidirectional data flow” (left side)**
+
+
+### 3. Right Side: Data Sources and Tools (Providers)
+- These are **capability providers**.
+#### Data and file systems
+- PostgreSQL, SQLite, Google Drive
+- Role:
+    - Provide context
+    - Provide ground truth
+### 4. Why MCP Is in the Middle (Architectural Reason)
+- Without MCP (❌ bad world):
+```vbnet
+ChatGPT → custom prompt → custom API → tool
+Claude → different prompt → different API → same tool
+IDE → another integration → same tool
+
+```
+- With MCP (✅ good world):
+```vbnet
+Any AI app → MCP → Any tool
+
+```
+- 
+
+## MCP Server
+### Understanding MCP Servers
+#### What an MCP Server Is
+- An MCP server is a standalone program whose job is to let AI systems safely do real-world things — using a strict, standardized interface (MCP).
+### Core Server Features
+![MCP Core Server Features](./images/mcp_core_server_features.png)
+#### 1. Tools
+- Tools are actions the model can actively decide to execute.
+- They can:
+    - Change state
+    - Trigger side effects
+    - Call APIs
+    - Write data
+- **Key characteristics**
+    - Active (they do something)
+    - Usually write-capable
+    - Invoked via `tools/call`
+    - Executed by the server
+    - Chosen by the model
+- “Who controls it: Model” — what that really means
+    - This does not mean the model is all-powerful.
+    - It means:
+        - The model decides when to call a tool
+        - Based on the user request and context
+    - But:
+        - The host controls whether the tool exists
+        - The server controls what the tool is allowed to do
+        - The model only chooses among allowed tools
+#### 2. Resources
+- **Resources are passive, read-only data sources used for context.**
+- They:
+    - Do not execute logic
+    - Do not modify anything
+    - Just return information
+- Examples from the table:
+    - Retrieve documents
+    - Access knowledge bases
+    - Read calendars
+- More examples:
+    - Source code files
+    - Database schemas
+    - API documentation
+    - Logs
+    - Config files
+#### 3. Prompts
+- **Prompts are pre-built instruction templates that guide how the model should think or act.**
+- They are not user messages and not tools.
+- They are:
+    - Structured instructions
+    - Often reusable
+    - Often task-specific
+- Examples from the table:
+    - Plan a vacation
+    - Summarize my meetings
+    - Draft an email
+- More examples:
 ## Architecture
 - client-host-server architecture where each host can run multiple client instances
 - It’s a 3-layer setup:
