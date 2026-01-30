@@ -2,6 +2,7 @@ from mcp.server.fastmcp import FastMCP
 from credentials import CredentialManager
 from tools.weather_tools import register_weather_tools
 from tools.web_search_tool import register_web_tools
+from tools.web_scrapy_tool import register_web_scrapy_tools
 def build_server()->FastMCP:
     mcp = FastMCP("basic-mcp2")
 
@@ -11,6 +12,7 @@ def build_server()->FastMCP:
 
     register_weather_tools(mcp=mcp)
     register_web_tools(mcp=mcp, credentials=creds)
+    register_web_scrapy_tools(mcp=mcp)
     return mcp
 
 def main():

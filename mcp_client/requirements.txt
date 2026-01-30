@@ -1,0 +1,8 @@
+mcp
+streamlit
+beautifulsoup4
+lxml
+requests
+
+httpx
+python-dotenv
