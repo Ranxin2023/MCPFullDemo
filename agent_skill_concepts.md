@@ -6,6 +6,11 @@
     - [The `Skill.md` File](#the-skillmd-file)
 - [Agent Skils Diagram](#agent-skills-diagram)
 - [Skills Speficication](#skills-specification)
+    - [The Name Field (Identity + Filesystem Contract)](#1-the-name-field-identity--filesystem-contract)
+- [Where Skills Work](#where-skills-work)
+    - [Claude API (most powerful, most explicit)](#1-claude-api-most-powerful-most-explicit)
+    - [Claude Code (local, filesystem-based)](#2-claude-code-local-filesystem-based)
+    - [Claude Agent SDK (programmatic agents)](#3-claude-agent-sdk-programmatic-agents)
 ## What are skills?
 ### Overview
 #### What is an “Agent Skill”
@@ -294,3 +299,144 @@ Agent formats output per skill rules
         - Full legal text lives elsewhere
         - Machines don’t need legal prose
     - Example from the screenshot:
+    ```yaml
+    license: Proprietary. LICENSE.txt has complete terms
+
+    ```
+    - Meaning:
+        - This skill is **not open source**
+        - Full terms are in `LICENSE.txt` in the skill directory
+### 4. `compatibility` field (environment contract)
+#### Rules from the spec
+- Must be **1–500 characters**
+- Only include it **if requirements exist**
+- Used to declare:
+    - runtime assumptions
+    - system packages
+    - network access
+    - 
+## How Skills Work
+### 1. Claude is not “just a prompt” anymore
+- “Claude operates in a virtual machine with filesystem access…”
+- This means: 
+    - Claude can:
+        - read files
+        - execute scripts
+        - load docs on demand
+    - Skills are **real directories**
+    - Instructions are **persistent files**
+- Think of it like:
+    - Onboarding docs for a new engineer, stored in a repo — not pasted into Slack every time.
+
+### 2. Progressive disclosure (why this matters)
+### 3. Three types of skill content → three loading levels
+#### Level 1: Metadata (always loaded)
+- **What it is**
+    - YAML frontmatter from `SKILL.md`
+    - Only:
+        - name
+        - description
+        - (plus optional metadata fields)
+    - Example:
+        ```yaml
+        name: pdf-processing
+        description: Extract text and tables from PDF files, fill forms, merge documents.
+
+        ```
+    - When it loads
+        - **At agent startup**
+        - Included in the **system prompt**
+#### Level 2: Instructions (loaded when triggered)
+- **What it is**
+    - The **Markdown** body of `SKILL.md`
+    - Workflows
+    - Best practices
+    - Guidance
+- Example:
+    ```md
+    ## Quick start
+    Use pdfplumber to extract text from PDFs...
+
+    ```
+- **When it loads**
+    - **Only after the user request matches the skill description**
+    - Loaded by reading `SKILL.md` from disk
+- **Token cost**
+    - Under ~5k tokens
+    - Only for the active skill
+
+#### Level 3: Resources and code (loaded as needed)
+- This is the power move.
+- **What lives here**
+    - Extra markdown files:
+        - `FORMS.md`
+        - `REFERENCE.md`
+    - Scripts:
+        - `fill_form.py`
+        - `validate.py`
+    - Schemas
+    - Templates
+    - Examples
+- Directory example:
+```markdown
+pdf-skill/
+├── SKILL.md
+├── FORMS.md
+├── REFERENCE.md
+└── scripts/
+    └── fill_form.py
+
+```
+- How these are loaded (key detail)
+    - They are NOT loaded into context by default.
+    - Instead: Claude
+        - reads files when referenced
+        - runs scripts via bash
+    - Scripts execute without consuming context tokens
+- This is why the table says:
+    - Token cost: effectively unlimited
+
+## Where Skills Work
+### 1. Claude API (most powerful, most explicit)
+- What it supports
+    - Pre-built Agent Skills
+    - Custom Skills
+    - Both behave identically at runtime
+- The difference is **how you reference them**.
+### 2. Claude Code (local, filesystem-based)
+#### What it supports
+- ✅ Custom Skills only
+- ❌ Pre-built Skills
+#### How Skills work here
+- “Create Skills as directories with SKILL.md files. Claude discovers and uses them automatically.”
+- This is the most developer-friendly model.
+    - Skills live in your local filesystem
+    - No API uploads
+    - No skill IDs
+    - No headers
+    - Just folders + `SKILL.md`
+
+- Claude Code:
+    - scans skill directories
+    - loads `{name, description}`
+    - activates skills automatically
+#### Key property
+- “Custom Skills in Claude Code are filesystem-based and don’t require API uploads.”
+- This is perfect for local MCP-style development.
+
+### 3. Claude Agent SDK (programmatic agents)
+#### What it supports
+- ✅ Custom Skills
+- Filesystem-based configuration
+
+#### Where skills live
+- “Create Skills as directories with SKILL.md files in `.claude/skills/`”
+- This directory is the **canonical location** for SDK-based agents.
+
+### 5. Critical differences summarized
+| **Environment** |  **Skills type**   | **How loaded**    | Shared?    | **Best for**        |
+| --------------- | ------------------ | ----------------- | ---------- | ------------------- |
+| Claude API      | Pre-built + Custom | API + headers     | Org-wide   | Production, SaaS    |
+| Claude Code     | Custom only        | Filesystem        | Local      | Dev, MCP-like work  |
+| Agent SDK       | Custom only        | `.claude/skills/` | App-scoped | Programmatic agents |
+| Claude.ai       | Both               | UI upload         | Per-user   | Power users         |
