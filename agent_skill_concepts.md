@@ -4,13 +4,37 @@
     - [Overview](#overview)
     - [How SKills Work](#how-skills-work)
     - [The `Skill.md` File](#the-skillmd-file)
+        - [SKILL.md = YAML frontmatter + Markdown body](#1-skillmd--yaml-frontmatter--markdown-body)
+        - [Required Frontmatter Fields](#2-required-frontmatter-fields)
 - [Agent Skils Diagram](#agent-skills-diagram)
+    - [Core System Prompt](#1-core-system-prompt)
+    - [Equipped Skills (blue tags)](#2-equipped-skills-blue-tags)
+    - [Equipped MCP Servers](#3-equipped-mcp-servers)
 - [Skills Speficication](#skills-specification)
     - [The Name Field (Identity + Filesystem Contract)](#1-the-name-field-identity--filesystem-contract)
+    - [The Description Field (Routing Intelligence)](#2-the-description-field-routing-intelligence)
+    - [License Field (Legal + Reuse Clarity)](#3-license-field-legal--reuse-clarity)
+- [How Skills Work](#how-skills-work-1)
+    - [Claude is Not “just a prompt” Anymore](#1-claude-is-not-just-a-prompt-anymore)
+    - [Progressive Disclosure (Why This Matters)](#2-progressive-disclosure-why-this-matters)
+    - [Three Types of Skill Content → Three Loading Levels](#3-three-types-of-skill-content--three-loading-levels)
+        - [Level 1: Metadata (always loaded)](#level-1-metadata-always-loaded)
+    - [How Claude Actually Loads These (Step-By-Step)](#4-how-claude-actually-loads-these-step-by-step)
 - [Where Skills Work](#where-skills-work)
     - [Claude API (most powerful, most explicit)](#1-claude-api-most-powerful-most-explicit)
     - [Claude Code (local, filesystem-based)](#2-claude-code-local-filesystem-based)
     - [Claude Agent SDK (programmatic agents)](#3-claude-agent-sdk-programmatic-agents)
+- [Integrate Skills Into Your Agent](#integrate-skills-into-your-agent)
+    - [Integration Approaches](#integration-approaches)
+        - [Filesystem-Based Agents (the “full power” model)](#1-filesystem-based-agents-the-full-power-model)
+        - [Tool-Based Agents (the Constrained Model)](#2-tool-based-agents-the-constrained-model)
+    - [The 5-Step Lifecycle](#the-5-step-lifecycle)
+        - [Discover Skills](#step-1-discover-skills)
+        - [Load Metadata at Startup](#step-2-load-metadata-at-startup)
+        - [Match User Tasks to Skills](#step-3-match-user-tasks-to-skills)
+        - [Activate Skills](#step-4-activate-skills)
+        - [Execute scripts / access resources](#step-5-execute-scripts--access-resources)
+
 ## What are skills?
 ### Overview
 #### What is an “Agent Skill”
@@ -138,7 +162,97 @@ Agent formats output per skill rules
             - Loaded during Activation
             - Gives the agent step-by-step workflow + rules + output format
 
+#### 2. Required frontmatter fields
+- The screenshot says the required fields are:
+    - `name`: “A short identifier”
+    - `description`: “When to use this skill”
+- `name` best practices
+    - short, stable, lowercase/kebab-case is common
+    - should be unique across skills
+    - should not be a whole sentence
+    - ✅ good: `pdf-processing`, `web-scrape`, `weather-alerts`
+    - ❌ bad: `How to process PDFs skill v2 final`
+- `description` best practices  
+    - This is extremely important because it drives **matching**.
+    - A good description:
+        - says when to use it (user intent)
+        - lists typical tasks
+        - uses keywords the user might say
 
+#### 3. What goes in the Markdown body (and why)
+- Recommended sections
+1. **When to use this skill**
+- triggers/keywords
+- what problems it solves
+2. **Inputs to ask for / assumptions**
+- what info you need from the user
+3. **Workflow**
+- numbered steps the agent should follow
+4. **Tool usage rules (if tools exist)**
+- which tools to call
+- when to call them
+- constraints (rate limits, safety, validation)
+5. **Output format**
+- bullet list / JSON / table / short summary + details
+
+#### 4. Why this format is useful (the 3 advantages)
+- **Self-documenting**
+    - Humans can read it easily:
+        - reviewers can audit it
+        - teammates can improve it
+        - debugging is straightforward (“the instruction says X”)
+- **Extensible**
+    - You can start simple:
+        - just text instructions
+    - …and later expand:
+        - add scripts/
+        - add references/
+        - add templates/assets/
+        - add examples
+    - So skills can scale from “tiny” to “production-grade”.
+- **Portable**
+    - A skill is “just files”.
+    - That means:
+        - easy to version in Git
+        - easy to share between projects
+        - easy to copy/paste into a new agent
+
+#### 5. How this relates to your MCP agent + tools (important)
+- In your MCP setup:
+    - MCP tools are real functions (`@mcp.tool()`) that execute.
+    - `SKILL.md` is the **policy + workflow** that tells the LLM how and when to call those tools.
+- So a solid pattern is:
+    - Tool docstrings explain what the function does
+    - `SKILL.md` explains how to solve the whole task end-to-end
+#### 6. A concrete example for YOUR project (Weather + Web tools)
+- Here’s a “good” `SKILL.md` style for your MCP tools:
+```md
+---
+name: web-research
+description: Search the web for up-to-date info and summarize results with sources. Use for current events, docs lookup, comparisons, and verification.
+---
+
+# Web Research
+
+## When to use this skill
+Use when the user asks for:
+- latest info, news, prices, releases
+- “look this up”, “verify”, “find sources”
+- links or citations
+
+## Tools
+- web_search(query, num_results, country)
+
+## Workflow
+1. Turn the user request into 1–3 search queries.
+2. Call web_search.
+3. Extract the key points from the top results.
+4. Return a structured summary:
+   - 3–5 bullet takeaways
+   - list of sources (title + url)
+5. If results conflict, note the disagreement instead of guessing.
+
+```
 ## Agent Skills Diagram
 ![Agent Skils Computer](images/agent_skills_computer.png)
 ### 1. Core system prompt
@@ -329,6 +443,15 @@ Agent formats output per skill rules
     - Onboarding docs for a new engineer, stored in a repo — not pasted into Slack every time.
 
 ### 2. Progressive disclosure (why this matters)
+- “Claude loads information in stages as needed”
+- Without this:
+    - Every skill would blow up context
+    - You’d be limited to ~3–5 skills
+    - Instructions would conflict
+- With progressive disclosure:
+    - You can install dozens or hundreds of skills
+    - Only the relevant one enters context
+    - Heavy resources never enter context at all
 ### 3. Three types of skill content → three loading levels
 #### Level 1: Metadata (always loaded)
 - **What it is**
@@ -395,6 +518,24 @@ pdf-skill/
     - Scripts execute without consuming context tokens
 - This is why the table says:
     - Token cost: effectively unlimited
+### 4. How Claude actually loads these (step-by-step)
+#### Step 1 — Metadata match
+- Claude compares:
+    - user request
+    - all skill descriptions
+- Finds:
+    - `pdf-processing`
+#### Step 2 — Instruction load
+- Claude:
+    - reads `skills/pdf-processing/SKILL.md`
+    - loads Markdown body into context
+#### Step 3 — Resource access
+- Instruction says:
+    - “For advanced form filling, see FORMS.md”
+- Claude:
+    - reads `FORMS.md` from disk
+    - or runs `fill_form.py` via bash
+- Only then is it used.
 
 ## Where Skills Work
 ### 1. Claude API (most powerful, most explicit)
@@ -432,7 +573,39 @@ pdf-skill/
 #### Where skills live
 - “Create Skills as directories with SKILL.md files in `.claude/skills/`”
 - This directory is the **canonical location** for SDK-based agents.
+- Example:
+```objectivec
+.claude/
+  skills/
+    web-research/
+      SKILL.md
+    weather/
+      SKILL.md
 
+```
+#### How to enable them
+- “Enable Skills by including skill in your allowed-tools configuration.”
+- This is a **security gate**:
+    - Skills are treated like tools
+    - You must explicitly allow them
+- Once enabled:
+    - Skills are auto-discovered at runtime
+    
+### 4. Claude.ai (web UI)
+- **What it supports**
+    - ✅ Pre-built Skills
+    - ✅ Custom Skills
+- Pre-built Skills (automatic)
+    - “These Skills are already working behind the scenes”
+- When you:
+    - create documents
+    - edit spreadsheets
+    - work with PDFs
+- Claude is already using skills like:
+    - `docx`
+    - `pptx`
+    - `xlsx`
+- You just don’t see them.
 ### 5. Critical differences summarized
 | **Environment** |  **Skills type**   | **How loaded**    | Shared?    | **Best for**        |
 | --------------- | ------------------ | ----------------- | ---------- | ------------------- |
@@ -440,3 +613,113 @@ pdf-skill/
 | Claude Code     | Custom only        | Filesystem        | Local      | Dev, MCP-like work  |
 | Agent SDK       | Custom only        | `.claude/skills/` | App-scoped | Programmatic agents |
 | Claude.ai       | Both               | UI upload         | Per-user   | Power users         |
+
+## Integrate skills into your agent
+### Integration Approaches
+#### 1. Filesystem-based agents (the “full power” model)
+- “Operate within a computer environment (bash/unix)”
+- **What this really means**
+    - Your agent:
+        - Has access to a **real or virtual machine**
+        - Can run shell commands
+        - Can read files from disk
+        - Can execute scripts
+    - Skills exist as **real directories** on disk.
+    - Example:
+    ```bash
+    skills/
+        pdf-processing/
+            SKILL.md
+            FORMS.md
+            scripts/fill_form.py
+
+    ```
+- **How skills activate in this model**
+    - “Skills are activated when models issue shell commands like `cat /path/to/my-skill/SKILL.md`”
+    - This is critical:
+        - The **model itself decides** when to load a skill
+        - It does so by reading the file via bash
+        - That read is what brings instructions into context
+    - So activation looks like:
+        ```sql
+        User asks → model decides → model reads SKILL.md → instructions enter context
+
+        ```
+#### 2. Tool-based agents (the constrained model)
+- “Function without a dedicated computer environment”
+- **What this really means**
+    - Your agent:
+        - Cannot run bash
+        - Cannot read arbitrary files
+        - Cannot execute scripts directly
+    - Instead, **you provide tools** that simulate these actions.
+
+- **How skills work here**
+    - You (the developer) implement tools like:
+        - `load_skill_metadata(skill_name)`
+        - `load_skill_instructions(skill_name)`
+        - `run_skill_script(skill_name, script_name)`
+        - `read_skill_resource(skill_name, file)`
+    - The model:
+        - Calls tools
+        - Tools fetch skill content
+        - Tools return results
+    - So you manually recreate what a filesystem would give you for free.
+- **Tradeoffs**
+    - ✅ Works in restricted environments
+    - ❌ More engineering work
+    - ❌ Less flexible
+    - ❌ Harder to scale
+    - ❌ Easy to leak tokens
+
+### The 5-step lifecycle
+#### Step 1: Discover skills
+- “Discover skills in configured directories”
+- What this means:
+    - Scan one or more directories
+    - Each subdirectory = one skill
+    - Look for `SKILL.md`
+- Example logic:
+```text
+for each folder in skills/:
+  if SKILL.md exists → register skill
+
+```
+#### Step 2: Load metadata at startup
+- “Load metadata (name and description) at startup”
+- Important:
+    - Only YAML frontmatter
+    - NOT the full instructions
+- This gives you:
+    - Skill registry
+    - Routing signals
+    - No context explosion
+- At this point the agent only knows:
+    - “These skills exist, and this is when to use them.”
+#### Step 3: Match user tasks to skills
+- “Match user tasks to relevant skills”
+- This is pure intent matching.
+- The agent compares:
+    - User request
+    - Skill descriptions
+- This can be:
+    - LLM reasoning
+    - Keyword matching
+    - Embeddings
+    - Hybrid logic
+#### Step 4: Activate skills
+- “Activate skills by loading full instructions”
+- This is the key transition.
+- Activation means:
+    - Read `SKILL.md` body
+    - Bring workflows into context
+    - Constrain behavior
+- Only now does the skill “take control”.
+#### Step 5: Execute scripts / access resources
+- “Execute scripts and access resources as needed”
+- This is Level 3:
+    - Run code
+    - Read references
+    - Call MCP tools
+    - Fetch data
+- Execution happens **outside the prompt**, results come back in.
