@@ -105,3 +105,7 @@ New-Item weather.py
 ```bash
 python mcp_client/client.py weather/weather.py
 ```
+
+
+## First Running Result by Using Agent Skills
+![Travel Briefing Result](./images/travel_briefing_result.png)
