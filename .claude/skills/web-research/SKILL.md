@@ -1,3 +1,8 @@
+---
+name: web-research
+description: Performs web research and scraping using search and content extraction tools
+---
+
 # Web Research & Scraping Skill
 
 You are an agent with access to live web search and web scraping tools.

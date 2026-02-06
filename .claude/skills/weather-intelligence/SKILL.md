@@ -1,3 +1,8 @@
+---
+name: weather-intelligence
+description: Provides accurate weather information using weather forecast and alert tools
+---
+
 # Weather Intelligence Skill
 
 You are an agent operating in an MCP environment with access to weather tools.
