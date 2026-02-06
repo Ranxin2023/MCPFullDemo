@@ -16,38 +16,37 @@ load_dotenv()
 
 # -------------------- Async Loop Helper --------------------
 
+
 class AsyncLoopThread:
-    """Manages a persistent event loop in a background thread"""
     def __init__(self):
         self.loop = None
         self.thread = None
+        self._ready = threading.Event()
 
     def start(self):
-        if self.thread is not None:
+        if self.thread and self.thread.is_alive():
             return
         self.thread = threading.Thread(target=self._run_loop, daemon=True)
         self.thread.start()
-        # Wait for loop to be ready
-        while self.loop is None:
-            pass
+        self._ready.wait()  # ✅ no busy-wait
 
     def _run_loop(self):
         self.loop = asyncio.new_event_loop()
         asyncio.set_event_loop(self.loop)
+        self._ready.set()   # ✅ signal loop is ready
         self.loop.run_forever()
 
     def run_coroutine(self, coro):
-        """Run a coroutine in the background loop and return the result"""
-        if self.loop is None:
-            self.start()
-        future = asyncio.run_coroutine_threadsafe(coro, self.loop)
-        return future.result()
+        if not self.loop:
+            raise RuntimeError("Async loop not started. Call start() first.")
+        fut = asyncio.run_coroutine_threadsafe(coro, self.loop)
+        return fut.result()
 
     def stop(self):
         if self.loop:
             self.loop.call_soon_threadsafe(self.loop.stop)
         if self.thread:
-            self.thread.join(timeout=5)
+            self.thread.join(timeout=2)
 
 # -------------------- MCP Client with Skills --------------------
 
@@ -93,7 +92,7 @@ class MCPClient:
 
     def find_local_skills(self, base_path: str = "./.claude/skills") -> list[dict]:
         """
-        scan local .claude/skills directory，find all effective skill folders
+        scan local .claude/skills directory, find all effective skill folders
         
         Returns:
             list of dicts: [{"path": "...", "name": "...", "display_title": "..."}]
@@ -104,16 +103,16 @@ class MCPClient:
         if not base_path.exists():
             return local_skills
         
-        # 遍历所有子文件夹
+        # traverse all the subfolders
         for skill_dir in base_path.iterdir():
             if skill_dir.is_dir():
                 skill_md = skill_dir / "SKILL.md"
                 if skill_md.exists():
-                    # 读取 SKILL.md 获取 name 和 description
+                    # fetch SKILL.md to obtain name and description
                     try:
                         with open(skill_md, 'r', encoding='utf-8') as f:
                             content = f.read()
-                            # 简单解析 YAML frontmatter
+                            # simple parse YAML frontmatter
                             if content.startswith('---'):
                                 parts = content.split('---', 2)
                                 if len(parts) >= 3:
@@ -144,7 +143,7 @@ class MCPClient:
         upload a custom skill
         
         Args:
-            skill_path: skill's path（include SKILL.md）
+            skill_path: skill's path(include SKILL.md)
             display_title: skill 's name
             
         Returns:
@@ -211,7 +210,7 @@ class MCPClient:
 
     def list_all_skills(self) -> list[dict]:
         """
-        list all available skills（including official Anthropic's and customer）
+        list all available skills(including official Anthropic's and customer)
         
         Returns:
             list of dicts with {id, display_title, source}
@@ -223,7 +222,7 @@ class MCPClient:
             {
                 "id": skill.id,
                 "display_title": skill.display_title,
-                "source": skill.source  # "anthropic" 或 "custom"
+                "source": skill.source  # "anthropic" or "custom"
             }
             for skill in skills.data
         ]
@@ -245,7 +244,7 @@ class MCPClient:
         """
         messages = [{"role": "user", "content": query}]
 
-        # 获取 MCP tools
+        # fetch MCP tools
         tools_resp = await self.session.list_tools()
         tools = [{
             "name": t.name,
@@ -253,7 +252,7 @@ class MCPClient:
             "input_schema": t.inputSchema
         } for t in tools_resp.tools]
         
-        # 添加 code execution tool（Skills 需要）
+        # add code execution tool（Skills required）
         tools.append({
             "type": "code_execution_20250825",
             "name": "code_execution"
@@ -261,7 +260,7 @@ class MCPClient:
 
         final_text = []
 
-        # 构建 API 调用参数
+        # construct API parameters
         api_params = {
             "model": "claude-sonnet-4-5-20250929",
             "max_tokens": 4096,
@@ -269,7 +268,7 @@ class MCPClient:
             "tools": tools,
         }
 
-        # 如果有可用的 skills，添加相关参数（Claude 会自动选择使用哪些）
+        # If there are available skills，add relavent parameters(Claude will automatically choose which to use)
         if available_skills:
             api_params["betas"] = ["code-execution-2025-08-25", "skills-2025-10-02"]
             api_params["container"] = {"skills": available_skills}
