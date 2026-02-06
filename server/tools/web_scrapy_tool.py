@@ -7,8 +7,9 @@ Respect robots.txt by default for ethical scraping.
 """
 from __future__ import annotations
 
+import json
 from typing import Any, List
-from urllib.parse import urlparse
+from urllib.parse import urljoin, urlparse
 from urllib.robotparser import RobotFileParser
 
 import httpx
@@ -89,6 +90,176 @@ def _is_allowed_by_robots(url: str) -> tuple[bool, str]:
         return False, f"Blocked by robots.txt for path: {path}"
 
 
+def _extract_metadata(soup: BeautifulSoup) -> dict[str, Any]:
+    """
+    Extract comprehensive metadata from HTML.
+
+    Extracts Open Graph, Twitter Cards, author, dates, keywords, and canonical URL.
+
+    Args:
+        soup: BeautifulSoup object
+
+    Returns:
+        Dictionary with metadata fields
+    """
+    metadata: dict[str, Any] = {}
+
+    # Open Graph metadata
+    og_tags = soup.find_all("meta", property=lambda x: x and x.startswith("og:"))
+    if og_tags:
+        og_data = {}
+        for tag in og_tags:
+            prop = tag.get("property", "").replace("og:", "")
+            content = tag.get("content", "")
+            if prop and content:
+                og_data[prop] = content
+        if og_data:
+            metadata["open_graph"] = og_data
+
+    # Twitter Card metadata
+    twitter_tags = soup.find_all("meta", attrs={"name": lambda x: x and x.startswith("twitter:")})
+    if twitter_tags:
+        twitter_data = {}
+        for tag in twitter_tags:
+            name = tag.get("name", "").replace("twitter:", "")
+            content = tag.get("content", "")
+            if name and content:
+                twitter_data[name] = content
+        if twitter_data:
+            metadata["twitter_card"] = twitter_data
+
+    # Author
+    author_tag = soup.find("meta", attrs={"name": "author"})
+    if author_tag:
+        metadata["author"] = author_tag.get("content", "")
+
+    # Publication date
+    date_tags = [
+        soup.find("meta", property="article:published_time"),
+        soup.find("meta", attrs={"name": "publication_date"}),
+        soup.find("meta", attrs={"name": "date"}),
+        soup.find("time", attrs={"datetime": True}),
+    ]
+    for tag in date_tags:
+        if tag:
+            date_val = tag.get("content") or tag.get("datetime")
+            if date_val:
+                metadata["published_date"] = date_val
+                break
+
+    # Modified date
+    modified_tag = soup.find("meta", property="article:modified_time")
+    if modified_tag:
+        metadata["modified_date"] = modified_tag.get("content", "")
+
+    # Keywords
+    keywords_tag = soup.find("meta", attrs={"name": "keywords"})
+    if keywords_tag:
+        keywords = keywords_tag.get("content", "")
+        if keywords:
+            metadata["keywords"] = [k.strip() for k in keywords.split(",")]
+
+    # Canonical URL
+    canonical_tag = soup.find("link", rel="canonical")
+    if canonical_tag:
+        metadata["canonical_url"] = canonical_tag.get("href", "")
+
+    return metadata
+
+
+def _extract_images(soup: BeautifulSoup, base_url: str, limit: int = 20) -> list[dict[str, str]]:
+    """
+    Extract images with alt text from HTML.
+
+    Converts relative URLs to absolute and limits results.
+
+    Args:
+        soup: BeautifulSoup object
+        base_url: Base URL for resolving relative URLs
+        limit: Maximum number of images to extract
+
+    Returns:
+        List of image dictionaries with src and alt
+    """
+    images = []
+
+    for img in soup.find_all("img", src=True):
+        src = img.get("src", "")
+
+        # Skip data URIs and empty src
+        if not src or src.startswith("data:"):
+            continue
+
+        # Convert relative URLs to absolute
+        if not src.startswith(("http://", "https://")):
+            src = urljoin(base_url, src)
+
+        alt = img.get("alt", "")
+
+        images.append({
+            "src": src,
+            "alt": alt,
+        })
+
+        if len(images) >= limit:
+            break
+
+    return images
+
+
+def _extract_structured_data(soup: BeautifulSoup) -> list[dict[str, Any]]:
+    """
+    Extract JSON-LD structured data from HTML.
+
+    Parses all JSON-LD script tags and handles errors gracefully.
+
+    Args:
+        soup: BeautifulSoup object
+
+    Returns:
+        List of parsed JSON-LD objects
+    """
+    structured_data = []
+
+    json_ld_tags = soup.find_all("script", type="application/ld+json")
+
+    for tag in json_ld_tags:
+        try:
+            data = json.loads(tag.string)
+            structured_data.append(data)
+        except (json.JSONDecodeError, TypeError, AttributeError):
+            # Skip invalid JSON-LD
+            continue
+
+    return structured_data
+
+
+def _extract_headings(soup: BeautifulSoup) -> list[dict[str, str]]:
+    """
+    Extract heading hierarchy from HTML.
+
+    Extracts h1-h6 tags with their level and text content.
+
+    Args:
+        soup: BeautifulSoup object
+
+    Returns:
+        List of heading dictionaries with level and text
+    """
+    headings = []
+
+    for level in range(1, 7):
+        for heading in soup.find_all(f"h{level}"):
+            text = heading.get_text(strip=True)
+            if text:
+                headings.append({
+                    "level": level,
+                    "text": text,
+                })
+
+    return headings
+
+
 def register_web_scrapy_tools(mcp: FastMCP) -> None:
     """Register web scrape tools with the MCP server."""
 
@@ -97,6 +268,9 @@ def register_web_scrapy_tools(mcp: FastMCP) -> None:
         url: str,
         selector: str | None = None,
         include_links: bool = False,
+        include_metadata: bool = True,
+        include_images: bool = False,
+        include_structured_data: bool = False,
         max_length: int = 50000,
         respect_robots_txt: bool = True,
     ) -> dict:
@@ -110,11 +284,14 @@ def register_web_scrapy_tools(mcp: FastMCP) -> None:
             url: URL of the webpage to scrape
             selector: CSS selector to target specific content (e.g., 'article', '.main-content')
             include_links: Include extracted links in the response
+            include_metadata: Include metadata (Open Graph, Twitter Cards, author, dates, keywords)
+            include_images: Include images with alt text (up to 20)
+            include_structured_data: Include JSON-LD structured data (Schema.org)
             max_length: Maximum length of extracted text (1000-500000)
             respect_robots_txt: Whether to respect robots.txt rules (default: True)
 
         Returns:
-            Dict with scraped content (url, title, description, content, length) or error dict
+            Dict with scraped content (url, title, description, content, length, headings) or error dict
         """
         try:
             # Validate URL
@@ -145,12 +322,9 @@ def register_web_scrapy_tools(mcp: FastMCP) -> None:
                     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
                     "Accept-Language": "en-US,en;q=0.5",
                 },
-                follow_redirects=False,
+                follow_redirects=True,
                 timeout=30.0,
             )
-
-            if response.status_code in (301, 302, 303, 307, 308):
-                return {"error": f"HTTP {response.status_code}: Failed to fetch URL"}
 
             # --- START FIX: Validate Content-Type ---
             # Added validation to prevent parsing non-HTML content (like JSON, PDF, Images)
@@ -211,8 +385,27 @@ def register_web_scrapy_tools(mcp: FastMCP) -> None:
                 "description": description,
                 "content": text,
                 "length": len(text),
+                "headings": _extract_headings(soup),
                 "robots_txt_respected": respect_robots_txt,
             }
+
+            # Extract metadata if requested
+            if include_metadata:
+                metadata = _extract_metadata(soup)
+                if metadata:
+                    result["metadata"] = metadata
+
+            # Extract images if requested
+            if include_images:
+                images = _extract_images(soup, str(response.url))
+                if images:
+                    result["images"] = images
+
+            # Extract structured data if requested
+            if include_structured_data:
+                structured_data = _extract_structured_data(soup)
+                if structured_data:
+                    result["structured_data"] = structured_data
 
             # Extract links if requested
             if include_links:

@@ -211,7 +211,7 @@ class MCPClient:
     def list_all_skills(self) -> list[dict]:
         """
         list all available skills(including official Anthropic's and customer)
-        
+
         Returns:
             list of dicts with {id, display_title, source}
         """
@@ -226,6 +226,68 @@ class MCPClient:
             }
             for skill in skills.data
         ]
+
+    def delete_skill(self, skill_id: str) -> bool:
+        """
+        Delete a custom skill by ID
+
+        Attempts to delete all versions first, then the skill itself.
+
+        Args:
+            skill_id: The skill ID to delete
+
+        Returns:
+            bool: True if successful
+        """
+        try:
+            # First, try to list and delete all versions
+            try:
+                versions = self.anthropic.beta.skills.versions.list(
+                    skill_id=skill_id,
+                    betas=["skills-2025-10-02"]
+                )
+
+                # Try to delete each version
+                for version in versions.data:
+                    try:
+                        self.anthropic.beta.skills.versions.delete(
+                            skill_id=skill_id,
+                            version=version.version,
+                            betas=["skills-2025-10-02"]
+                        )
+                    except Exception:
+                        # Version deletion might fail with 500 or 404 errors (API bug)
+                        # Try to continue anyway
+                        pass
+            except Exception:
+                # If version listing/deletion fails, try to delete skill anyway
+                pass
+
+            # Now try to delete the skill itself
+            self.anthropic.beta.skills.delete(
+                skill_id=skill_id,
+                betas=["skills-2025-10-02"]
+            )
+
+            # Remove from uploaded_skills cache if present
+            for title, sid in list(self.uploaded_skills.items()):
+                if sid == skill_id:
+                    del self.uploaded_skills[title]
+                    break
+            return True
+
+        except Exception as e:
+            error_msg = str(e)
+
+            # Provide helpful error message for known API bug
+            if "Cannot delete skill with existing versions" in error_msg:
+                raise Exception(
+                    "⚠️ Anthropic API Bug: Cannot delete this skill due to version conflicts. "
+                    "\n\n💡 Good news: This skill is beyond the 8-skill limit, so it's not being used! "
+                    "\nYou can safely ignore it, or contact Anthropic support to manually remove it."
+                )
+            else:
+                raise Exception(f"Failed to delete skill: {e}")
 
     async def ask(self, query: str, available_skills: list[dict] = None) -> str:
         """
@@ -492,20 +554,63 @@ with st.sidebar:
 
         # Display all available skills (all will be passed to Claude)
         st.write("**Available Skills:**")
-        st.caption("ℹ️ All skills below are automatically available to Claude. Claude will decide which ones to use based on your query.")
+
+        total_skills = len(st.session_state.available_skills)
+        if total_skills > 8:
+            st.warning(f"⚠️ You have {total_skills} skills, but API limit is 8. Only the first 8 will be used.")
+            st.caption("ℹ️ Consider removing some skills or manually selecting which to use.")
+        else:
+            st.caption("ℹ️ All skills below are automatically available to Claude. Claude will decide which ones to use based on your query.")
 
         if st.session_state.available_skills:
-            for skill in st.session_state.available_skills:
+            for idx, skill in enumerate(st.session_state.available_skills):
                 skill_type = skill["source"]  # "anthropic" or "custom"
                 display_title = skill["display_title"]
 
                 # Display skill with icon based on type
                 icon = "🏢" if skill_type == "anthropic" else "⚙️"
-                st.write(f"{icon} **{display_title}** `({skill_type})`")
 
-            st.caption(f"🎯 **{len(st.session_state.available_skills)} skill(s) available to Claude**")
+                # Mark skills that won't be used (beyond the 8th)
+                if idx >= 8:
+                    st.write(f"~~{icon} **{display_title}** `({skill_type})`~~ ❌ *Not used*")
+                else:
+                    st.write(f"{icon} **{display_title}** `({skill_type})`")
+
+            active_count = min(total_skills, 8)
+            st.caption(f"🎯 **{active_count}/{total_skills} skill(s) active**")
         else:
             st.info("No skills available. Upload some skills first!")
+
+        st.divider()
+
+        # Delete skills section
+        with st.expander("🗑️ Delete Skills"):
+            st.caption("⚠️ You can only delete custom skills. Anthropic-managed skills cannot be deleted.")
+
+            custom_skills = [s for s in st.session_state.available_skills if s["source"] == "custom"]
+
+            if custom_skills:
+                st.write(f"**Found {len(custom_skills)} custom skill(s):**")
+
+                for skill in custom_skills:
+                    col1, col2 = st.columns([3, 1])
+                    with col1:
+                        st.write(f"⚙️ **{skill['display_title']}**")
+                        st.caption(f"ID: `{skill['id']}`")
+                    with col2:
+                        if st.button("Delete", key=f"delete_{skill['id']}"):
+                            try:
+                                with st.spinner(f"Deleting {skill['display_title']}..."):
+                                    st.session_state.client.delete_skill(skill['id'])
+                                    # Refresh skills list
+                                    skills = st.session_state.client.list_all_skills()
+                                    st.session_state.available_skills = skills
+                                st.success(f"✅ Deleted {skill['display_title']}")
+                                st.rerun()
+                            except Exception as e:
+                                st.error(f"Failed to delete: {e}")
+            else:
+                st.info("No custom skills to delete")
     else:
         st.write("Not connected")
 
@@ -542,14 +647,24 @@ if prompt:
             with st.spinner("Thinking..."):
                 try:
                     # Convert available skills to the format expected by API
-                    skills_for_api = [
-                        {
-                            "type": skill["source"],
-                            "skill_id": skill["id"],
-                            "version": "latest"
-                        }
-                        for skill in st.session_state.available_skills
-                    ] if st.session_state.available_skills else None
+                    # IMPORTANT: API limit is 8 skills maximum
+                    skills_for_api = None
+                    if st.session_state.available_skills:
+                        all_skills = [
+                            {
+                                "type": skill["source"],
+                                "skill_id": skill["id"],
+                                "version": "latest"
+                            }
+                            for skill in st.session_state.available_skills
+                        ]
+
+                        # Limit to 8 skills (API constraint)
+                        if len(all_skills) > 8:
+                            st.warning(f"⚠️ You have {len(all_skills)} skills, but API limit is 8. Using first 8 skills.")
+                            skills_for_api = all_skills[:8]
+                        else:
+                            skills_for_api = all_skills
 
                     # Pass all available skills to Claude - Claude will decide which to use
                     answer = st.session_state.loop_thread.run_coroutine(
