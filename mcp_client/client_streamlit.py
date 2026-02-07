@@ -11,6 +11,7 @@ from anthropic.lib import files_from_dir
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 from dotenv import load_dotenv
+from skills_db import SkillsDatabase
 
 load_dotenv()
 
@@ -56,7 +57,7 @@ class MCPClient:
         self.anthropic = Anthropic()
         self.loop_thread = loop_thread
         self.exit_stack = AsyncExitStack()
-        self.uploaded_skills = {}  # store uploaded skills {display_title: skill_id}
+        self.db = SkillsDatabase()  # SQLite database for skills management
 
     async def connect(self, server_script_path: str):
         is_python = server_script_path.endswith(".py")
@@ -141,11 +142,11 @@ class MCPClient:
     def upload_skill(self, skill_path: str, display_title: str) -> str:
         """
         upload a custom skill
-        
+
         Args:
             skill_path: skill's path(include SKILL.md)
             display_title: skill 's name
-            
+
         Returns:
             skill_id: uploaded skill ID
         """
@@ -154,7 +155,11 @@ class MCPClient:
             files=files_from_dir(skill_path),
             betas=["skills-2025-10-02"]
         )
-        self.uploaded_skills[display_title] = skill.id
+
+        # Update database with uploaded skill ID
+        skill_name = display_title.lower().replace(' ', '-')
+        self.db.mark_as_uploaded(skill_name, skill.id)
+
         return skill.id
 
     def upload_all_local_skills(self, base_path: str = "./.claude/skills") -> dict:
@@ -166,6 +171,9 @@ class MCPClient:
         """
         local_skills = self.find_local_skills(base_path)
         results = {"successful": [], "failed": [], "skipped": []}
+
+        # Sync local skills to database first
+        self.db.sync_local_skills(local_skills)
 
         # Get existing skills to check for duplicates
         existing_skills = self.list_all_skills()
@@ -218,7 +226,8 @@ class MCPClient:
         skills = self.anthropic.beta.skills.list(
             betas=["skills-2025-10-02"]
         )
-        return [
+
+        skill_list = [
             {
                 "id": skill.id,
                 "display_title": skill.display_title,
@@ -226,6 +235,11 @@ class MCPClient:
             }
             for skill in skills.data
         ]
+
+        # Sync uploaded skills to database
+        self.db.sync_uploaded_skills(skill_list)
+
+        return skill_list
 
     def delete_skill(self, skill_id: str) -> bool:
         """
@@ -264,16 +278,14 @@ class MCPClient:
                 pass
 
             # Now try to delete the skill itself
-            self.anthropic.beta.skills.delete(
-                skill_id=skill_id,
-                betas=["skills-2025-10-02"]
-            )
+            # self.anthropic.beta.skills.delete(
+            #     skill_id=skill_id,
+            #     betas=["skills-2025-10-02"]
+            # )
 
-            # Remove from uploaded_skills cache if present
-            for title, sid in list(self.uploaded_skills.items()):
-                if sid == skill_id:
-                    del self.uploaded_skills[title]
-                    break
+            # Remove from database
+            self.db.delete_skill_by_id(skill_id)
+
             return True
 
         except Exception as e:
@@ -389,6 +401,11 @@ class MCPClient:
     async def close(self):
         await self.exit_stack.aclose()
 
+    def get_skills_from_db(self) -> list[dict]:
+        """
+        Load all skills directly from SQLite database.
+        """
+        return self.db.get_all_skills()
 
 # -------------------- Streamlit Setup --------------------
 
@@ -552,6 +569,40 @@ with st.sidebar:
         
         st.divider()
 
+        # Database Statistics
+        with st.expander("📊 Database Statistics", expanded=False):
+            try:
+                stats = st.session_state.client.db.get_stats()
+
+                col1, col2, col3 = st.columns(3)
+                with col1:
+                    st.metric("Total Skills", stats['total'])
+                with col2:
+                    st.metric("Uploaded", stats['uploaded'])
+                with col3:
+                    st.metric("Local Only", stats['total'] - stats['uploaded'])
+
+                st.caption(f"📂 Anthropic: {stats['anthropic']} | ⚙️ Custom: {stats['custom']} | 💾 Local: {stats['local']}")
+
+                # Show all skills from database
+                if st.checkbox("Show all database skills", value=False):
+                    db_skills = st.session_state.client.db.get_all_skills()
+                    if db_skills:
+                        st.write("**Skills in Database:**")
+                        for skill in db_skills:
+                            status = "✅ Uploaded" if skill['is_uploaded'] else "📁 Local"
+                            st.write(f"• **{skill['display_title']}** - {status}")
+                            if skill['skill_id']:
+                                st.caption(f"  ID: `{skill['skill_id']}`")
+                            if skill['local_path']:
+                                st.caption(f"  Path: `{skill['local_path']}`")
+                    else:
+                        st.info("No skills in database yet")
+            except Exception as e:
+                st.error(f"Failed to load database stats: {e}")
+
+        st.divider()
+
         # Display all available skills (all will be passed to Claude)
         st.write("**Available Skills:**")
 
@@ -601,14 +652,29 @@ with st.sidebar:
                         if st.button("Delete", key=f"delete_{skill['id']}"):
                             try:
                                 with st.spinner(f"Deleting {skill['display_title']}..."):
+                                    # 1️⃣ Delete from DB
                                     st.session_state.client.delete_skill(skill['id'])
-                                    # Refresh skills list
-                                    skills = st.session_state.client.list_all_skills()
-                                    st.session_state.available_skills = skills
+
+                                    # 2️⃣ Reload from DB (NOT Anthropic)
+                                    db_skills = st.session_state.client.get_skills_from_db()
+
+                                    # 3️⃣ Convert DB rows → UI format
+                                    st.session_state.available_skills = [
+                                        {
+                                            "id": s["skill_id"],
+                                            "display_title": s["display_title"],
+                                            "source": s["source"],
+                                        }
+                                        for s in db_skills
+                                        if s["skill_id"]  # only uploaded skills
+                                    ]
+
                                 st.success(f"✅ Deleted {skill['display_title']}")
                                 st.rerun()
+
                             except Exception as e:
                                 st.error(f"Failed to delete: {e}")
+                                
             else:
                 st.info("No custom skills to delete")
     else:
