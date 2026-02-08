@@ -55,6 +55,18 @@ SEARCH_CREDENTIALS = {
     #     description="API key for Google Custom Search",
     # ),
 }
+
+EMAIL_CREDENTIALS = {
+    "resend": CredentialSpec(
+        env_var="RESEND_API_KEY",
+        tools=["send_email", "send_budget_alert_email"],
+        node_types=[],
+        required=True,
+        startup_required=False,
+        help_url="https://resend.com/api-keys",
+        description="API key for Resend email service",
+    ),
+}
 LLM_CREDENTIALS = {
     "anthropic": CredentialSpec(
         env_var="ANTHROPIC_API_KEY",
@@ -80,6 +92,7 @@ LLM_CREDENTIALS = {
 CREDENTIAL_SPECS = {
     **LLM_CREDENTIALS,
     **SEARCH_CREDENTIALS,
+    **EMAIL_CREDENTIALS,
 }
 class CredentialManager:
     """

@@ -12,16 +12,16 @@ from __future__ import annotations
 import os
 from typing import TYPE_CHECKING, Literal
 
-import resend
-from fastmcp import FastMCP
+import resend # type: ignore
+from mcp.server.fastmcp import FastMCP
 
 if TYPE_CHECKING:
-    from aden_tools.credentials import CredentialStoreAdapter
+    from credentials import CredentialManager
 
 
 def register_tools(
     mcp: FastMCP,
-    credentials: CredentialStoreAdapter | None = None,
+    credentials: CredentialManager | None = None,
 ) -> None:
     """Register email tools with the MCP server."""
 
