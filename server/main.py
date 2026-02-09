@@ -7,7 +7,8 @@ from tools.geo_tools import register_geo_tools
 from tools.content_tools import register_content_tools
 from tools.research_tools import register_research_tools
 from tools.storage_tools import register_storage_tools
-from tools.email_tools import register_tools as register_email_tools
+# from tools.email_tools import register_tools as register_email_tools
+from tools.email_tools2 import register_email_tools
 def build_server()->FastMCP:
     mcp = FastMCP("basic-mcp2")
 
@@ -22,7 +23,8 @@ def build_server()->FastMCP:
     register_content_tools(mcp=mcp)
     register_research_tools(mcp=mcp)
     register_storage_tools(mcp=mcp)
-    register_email_tools(mcp=mcp, credentials=creds)
+    register_email_tools(mcp=mcp)
+    # register_email_tools(mcp=mcp, credentials=creds)
     return mcp
 
 def main():

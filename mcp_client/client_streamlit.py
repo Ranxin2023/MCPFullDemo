@@ -166,55 +166,63 @@ class MCPClient:
         """
         upload all the skills under .claude/skills/*
 
-        Returns:
-            dict: {"successful": [...], "failed": [...], "skipped": [...]}
+        Database is the ONLY source of truth:
+        - If a skill is deleted from DB → NEVER upload again
+        - If is_uploaded = 1 → skip
         """
+
         local_skills = self.find_local_skills(base_path)
         results = {"successful": [], "failed": [], "skipped": []}
 
-        # Sync local skills to database first
+        # 1️⃣ synchronize skill（only add / update，don't resurrect what has already been deleted）
         self.db.sync_local_skills(local_skills)
 
-        # Get existing skills to check for duplicates
-        existing_skills = self.list_all_skills()
-        existing_titles = {s["display_title"] for s in existing_skills}
+        # 2️⃣ read the current state from the database
+        db_skills = self.db.get_all_skills()
+        db_skill_map = {s["name"]: s for s in db_skills}
 
         for skill in local_skills:
-            # Skip if already exists
-            if skill["display_title"] in existing_titles:
+            name = skill["name"]
+
+            # 🚫 case 1: database doesn't exist → already been Deleted
+            if name not in db_skill_map:
                 results["skipped"].append({
-                    "name": skill["name"],
+                    "name": name,
+                    "display_title": skill["display_title"],
+                    "reason": "Deleted from database"
+                })
+                continue
+
+            db_record = db_skill_map[name]
+
+            # 🚫 case 2: have uploaded
+            if db_record["is_uploaded"]:
+                results["skipped"].append({
+                    "name": name,
                     "display_title": skill["display_title"],
                     "reason": "Already uploaded"
                 })
                 continue
 
+            # ✅ case 3：allowing upload
             try:
                 skill_id = self.upload_skill(
                     skill_path=skill["path"],
                     display_title=skill["display_title"]
                 )
                 results["successful"].append({
-                    "name": skill["name"],
+                    "name": name,
                     "display_title": skill["display_title"],
                     "skill_id": skill_id
                 })
             except Exception as e:
-                error_msg = str(e)
-                # Handle duplicate errors gracefully
-                if "reuse an existing display_title" in error_msg:
-                    results["skipped"].append({
-                        "name": skill["name"],
-                        "display_title": skill["display_title"],
-                        "reason": "Already uploaded"
-                    })
-                else:
-                    results["failed"].append({
-                        "name": skill["name"],
-                        "error": error_msg
-                    })
+                results["failed"].append({
+                    "name": name,
+                    "error": str(e)
+                })
 
         return results
+
 
     def list_all_skills(self) -> list[dict]:
         """
@@ -241,65 +249,86 @@ class MCPClient:
 
         return skill_list
 
+    # def delete_skill(self, skill_id: str) -> bool:
+    #     """
+    #     Delete a custom skill by ID
+
+    #     Attempts to delete all versions first, then the skill itself.
+
+    #     Args:
+    #         skill_id: The skill ID to delete
+
+    #     Returns:
+    #         bool: True if successful
+    #     """
+    #     try:
+    #         # First, try to list and delete all versions
+    #         try:
+    #             versions = self.anthropic.beta.skills.versions.list(
+    #                 skill_id=skill_id,
+    #                 betas=["skills-2025-10-02"]
+    #             )
+
+    #             # Try to delete each version
+    #             for version in versions.data:
+    #                 try:
+    #                     self.anthropic.beta.skills.versions.delete(
+    #                         skill_id=skill_id,
+    #                         version=version.version,
+    #                         betas=["skills-2025-10-02"]
+    #                     )
+    #                 except Exception:
+    #                     # Version deletion might fail with 500 or 404 errors (API bug)
+    #                     # Try to continue anyway
+    #                     pass
+    #         except Exception:
+    #             # If version listing/deletion fails, try to delete skill anyway
+    #             pass
+
+    #         # Now try to delete the skill itself
+    #         # self.anthropic.beta.skills.delete(
+    #         #     skill_id=skill_id,
+    #         #     betas=["skills-2025-10-02"]
+    #         # )
+
+    #         # Remove from database
+    #         self.db.delete_skill_by_id(skill_id)
+
+    #         return True
+
+    #     except Exception as e:
+    #         error_msg = str(e)
+
+    #         # Provide helpful error message for known API bug
+    #         if "Cannot delete skill with existing versions" in error_msg:
+    #             raise Exception(
+    #                 "⚠️ Anthropic API Bug: Cannot delete this skill due to version conflicts. "
+    #                 "\n\n💡 Good news: This skill is beyond the 8-skill limit, so it's not being used! "
+    #                 "\nYou can safely ignore it, or contact Anthropic support to manually remove it."
+    #             )
+    #         else:
+    #             raise Exception(f"Failed to delete skill: {e}")
     def delete_skill(self, skill_id: str) -> bool:
         """
-        Delete a custom skill by ID
-
-        Attempts to delete all versions first, then the skill itself.
-
-        Args:
-            skill_id: The skill ID to delete
-
-        Returns:
-            bool: True if successful
+        Delete a custom skill COMPLETELY:
+        - resolve name by skill_id
+        - delete ALL records with that name
         """
         try:
-            # First, try to list and delete all versions
-            try:
-                versions = self.anthropic.beta.skills.versions.list(
-                    skill_id=skill_id,
-                    betas=["skills-2025-10-02"]
-                )
+            # 1️⃣ find skill_id by corresponding DB records
+            skill = self.db.get_skill_by_id(skill_id)
+            if not skill:
+                raise Exception("Skill not found in database")
 
-                # Try to delete each version
-                for version in versions.data:
-                    try:
-                        self.anthropic.beta.skills.versions.delete(
-                            skill_id=skill_id,
-                            version=version.version,
-                            betas=["skills-2025-10-02"]
-                        )
-                    except Exception:
-                        # Version deletion might fail with 500 or 404 errors (API bug)
-                        # Try to continue anyway
-                        pass
-            except Exception:
-                # If version listing/deletion fails, try to delete skill anyway
-                pass
+            name = skill["name"]
 
-            # Now try to delete the skill itself
-            # self.anthropic.beta.skills.delete(
-            #     skill_id=skill_id,
-            #     betas=["skills-2025-10-02"]
-            # )
-
-            # Remove from database
-            self.db.delete_skill_by_id(skill_id)
+            # 2️⃣ delete by name
+            self.db.delete_skill(name)
 
             return True
 
         except Exception as e:
-            error_msg = str(e)
-
-            # Provide helpful error message for known API bug
-            if "Cannot delete skill with existing versions" in error_msg:
-                raise Exception(
-                    "⚠️ Anthropic API Bug: Cannot delete this skill due to version conflicts. "
-                    "\n\n💡 Good news: This skill is beyond the 8-skill limit, so it's not being used! "
-                    "\nYou can safely ignore it, or contact Anthropic support to manually remove it."
-                )
-            else:
-                raise Exception(f"Failed to delete skill: {e}")
+            raise Exception(f"Failed to delete skill: {e}")
 
     async def ask(self, query: str, available_skills: list[dict] = None) -> str:
         """
@@ -406,7 +435,7 @@ class MCPClient:
         Load all skills directly from SQLite database.
         """
         return self.db.get_all_skills()
-
+    
 # -------------------- Streamlit Setup --------------------
 
 st.set_page_config(
@@ -466,15 +495,23 @@ with st.sidebar:
                     tools = st.session_state.loop_thread.run_coroutine(
                         client.list_tool_names()
                     )
-                with st.spinner("Loading skills..."):
-                    skills = client.list_all_skills()
+                with st.spinner("Loading skills from database..."):
+                    skills = client.get_skills_from_db()
                 with st.spinner("Scanning local skills..."):
                     local_skills = client.find_local_skills()
                 
                 st.session_state.client = client
                 st.session_state.connected = True
                 st.session_state.tools = tools
-                st.session_state.available_skills = skills
+                st.session_state.available_skills = [
+                    {
+                        "id": s["skill_id"],
+                        "display_title": s["display_title"],
+                        "source": s["source"],
+                    }
+                    for s in skills
+                    if s["skill_id"]  # only show what I have uploaded in db
+                ]
                 st.session_state.local_skills = local_skills
                 st.success(f"✅ Connected! Found {len(tools)} tools, {len(skills)} skills, {len(local_skills)} local skills")
             except Exception as e:
@@ -534,8 +571,16 @@ with st.sidebar:
                                 st.write(f"  • {f['name']}: {f['error']}")
 
                         # Refresh skills list
-                        skills = st.session_state.client.list_all_skills()
-                        st.session_state.available_skills = skills
+                        db_skills = st.session_state.client.get_skills_from_db()
+                        st.session_state.available_skills = [
+                            {
+                                "id": s["skill_id"],
+                                "display_title": s["display_title"],
+                                "source": s["source"],
+                            }
+                            for s in db_skills
+                            if s["skill_id"]
+                        ]
             else:
                 st.info("No local skills found in `.claude/skills/`")
                 st.caption("Create skill folders with SKILL.md files to get started")

@@ -3,3 +3,5 @@ server/tools/file_system_toolkits/
 nul
 delete_skills/
 skills.db
+credentials.json
+token.json
